@@ -1,0 +1,64 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bin: wormhole.exe
+            artifact: wormhole-windows-x86_64.exe
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            bin: wormhole
+            artifact: wormhole-linux-gnu-x86_64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            bin: wormhole
+            artifact: wormhole-linux-musl-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install musl-tools
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --target ${{ matrix.target }}
+      - name: Rename
+        shell: bash
+        run: cp target/${{ matrix.target }}/release/${{ matrix.bin }} ${{ matrix.artifact }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  publish:
+    needs: [build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - run: |
+          cd dist
+          sha256sum * > checksums.txt
+          TAG=${GITHUB_REF_NAME:-manual}
+          for f in wormhole-windows-x86_64.exe; do mv "$f" "wormhole-$TAG-windows-x86_64.exe"; done
+          for f in wormhole-linux-*-x86_64; do mv "$f" "wormhole-$TAG-$f"; done || true
+          # normalize: wormhole-linux-gnu-x86_64 -> wormhole-<tag>-linux-gnu-x86_64
+          ls
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
